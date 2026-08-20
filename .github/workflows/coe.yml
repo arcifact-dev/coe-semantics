@@ -1,0 +1,65 @@
+name: continue-on-error semantics
+
+# One controlled experiment.
+#
+# GitHub documents, for STEPS, that a continue-on-error step which fails
+# has outcome `failure` and conclusion `success`. It does not document
+# the equivalent for JOBS, and `needs.<job>.result` for a failed
+# continue-on-error job is the premise a live finding rests on.
+#
+# 176 job instances across 17 continue-on-error jobs in real repositories
+# produced no failure at all, because continue-on-error is applied to
+# advisory work precisely BECAUSE it rarely fails. So the experiment is
+# run here instead.
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  # This job FAILS, and is marked continue-on-error.
+  flaky:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: fail deliberately
+        run: |
+          echo "this step exits 1"
+          exit 1
+
+  # A control: an identical failing job WITHOUT continue-on-error.
+  # Without it, an observation about `flaky` cannot be attributed to the
+  # continue-on-error marking rather than to something else.
+  honest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: fail deliberately
+        run: exit 1
+
+  # The observer. Runs under always() so it survives both failures, and
+  # records the raw results rather than interpreting them.
+  observe:
+    needs: [flaky, honest]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: record what needs reports
+        run: |
+          echo "RESULT flaky  = ${{ needs.flaky.result }}"
+          echo "RESULT honest = ${{ needs.honest.result }}"
+          echo "NEEDS_JSON = ${{ toJSON(needs) }}"
+
+  # And the question that actually matters: would a tolerant gate,
+  # rejecting only "failure", survive the flaky job failing?
+  tolerant_gate:
+    needs: [flaky]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: a gate that rejects only failure
+        run: |
+          if [[ "${{ needs.flaky.result }}" == "failure" ]]; then
+            echo "gate sees failure -> RED"
+            exit 1
+          fi
+          echo "gate sees ${{ needs.flaky.result }} -> GREEN"
